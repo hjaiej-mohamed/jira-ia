@@ -7,142 +7,192 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jira.mcp.domain.models.Ticket;
 import com.jira.mcp.tools.ticket.dtos.TicketDTO;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.List;
-
 /**
- * Mapper responsible for converting between raw JSON ticket data, TicketDTO, and Ticket domain models.
+ * Mapper responsible for transforming raw ticket data between:
+ *  - JSON input received from external systems (e.g., Jira exports, MCP tool requests)
+ *  - {@link TicketDTO} objects used at the application boundary
+ *  - {@link Ticket} domain entities used internally and persisted.
  *
- * <p>This mapper is typically used by MCP Tools to:
+ * <p>This component ensures that incoming data is:
  * <ul>
- *     <li>Normalize incoming JSON payloads (especially timestamps)</li>
- *     <li>Validate required fields before indexing or embedding</li>
- *     <li>Convert DTO objects to domain entities (and vice-versa)</li>
+ *     <li>Normalized — especially timestamps, ensuring {@code created} is valid ISO-8601</li>
+ *     <li>Validated — required fields must be present and non-empty</li>
+ *     <li>Mapped — conversions remain centralized and consistent across the application</li>
  * </ul>
  *
- * <p>Normalization:
- * The mapper ensures that the {@code created} date is compliant with ISO-8601 format,
- * adding missing seconds or timezone where necessary to ensure successful deserialization into {@link java.time.Instant}.
+ * <p>This prevents downstream failures during:
+ * <ul>
+ *     <li>Vector embedding / similarity indexing</li>
+ *     <li>Storage into persistence layers (DB or Vector Store)</li>
+ *     <li>MCP tool inference and reasoning steps</li>
+ * </ul>
  *
- * <p>Validation:
- * If any required field is missing, an {@link IllegalArgumentException} is thrown,
- * which allows MCP agents and APIs to return meaningful structured errors.
+ * <p>If validation fails, the mapper throws {@link IllegalArgumentException}.
+ * This allows upper layers (MCP Agents, REST APIs) to send structured error feedback
+ * while keeping domain code clean.</p>
  */
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class TicketDtoMapper {
 
+    /** JSON mapper used for deserialization and object conversion. */
     private final ObjectMapper objectMapper;
 
     /**
-     * Converts a JSON array of ticket-like objects into a validated list of {@link TicketDTO}.
-     * <p>
-     * Performs three steps:
+     * Converts a JSON array representing multiple ticket entries into a list of validated {@link TicketDTO} objects.
+     *
+     * <p>Processing steps:
      * <ol>
-     *     <li>Normalizes the {@code created} timestamp to a standard ISO-8601 format</li>
-     *     <li>Deserializes JSON → List of {@link TicketDTO}</li>
-     *     <li>Validates each ticket object and throws meaningful errors if required fields are missing</li>
+     *     <li>Normalize timestamp formats to ensure {@code Instant.parse()} compatibility</li>
+     *     <li>Deserialize JSON → List of {@link TicketDTO}</li>
+     *     <li>Validate field integrity for each DTO</li>
      * </ol>
      *
-     * @param root A JSON array node representing an array of ticket objects.
-     * @return A validated list of {@link TicketDTO}.
-     * @throws IOException If JSON parsing fails.
-     * @throws IllegalArgumentException If any field-level validation fails.
+     * @param root A JSON array node where each element describes a ticket.
+     * @return A validated list of DTOs ready for conversion into domain entities.
+     * @throws IOException If the JSON format is malformed.
+     * @throws IllegalArgumentException If required fields are missing or invalid.
      */
     public List<TicketDTO> mapTicketsJsonToTicketsDTO(JsonNode root) throws IOException {
+        if (log.isDebugEnabled())
+            log.debug("Received JSON payload for ticket mapping. Size: {}", root.size());
 
-        // 1. Normalize "created" date field to ISO-8601 if incomplete.
+        // Normalize created timestamp fields early to ensure valid Instant parsing
         for (JsonNode node : root) {
-            JsonNode createdNode = node.get("created");
-
-            if (createdNode != null && createdNode.isTextual()) {
-                String createdStr = createdNode.asText().trim();
-
-                // YYYY-MM-DDTHH:MM → add seconds + Z
-                if (createdStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$")) {
-                    createdStr += ":00Z";
-                }
-                // YYYY-MM-DDTHH:MM:SS → add Z if missing timezone
-                else if (createdStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$")
-                        && !createdStr.matches(".*[Z+-].*")) {
-                    createdStr += "Z";
-                }
-
-                ((ObjectNode) node).put("created", createdStr);
-            }
+            normalizeCreatedTimestamp((ObjectNode) node);
         }
 
-        // 2. Deserialize JSON → List<TicketDTO>
-        List<TicketDTO> ticketDTOS = objectMapper.readValue(
-                root.traverse(),
-                new TypeReference<>() {}
-        );
+        List<TicketDTO> dtos;
+        try {
+            dtos = objectMapper.readValue(
+                    root.traverse(),
+                    new TypeReference<List<TicketDTO>>() {}
+            );
+        } catch (Exception e) {
+            if (log.isErrorEnabled())
+                log.error("Failed to deserialize tickets JSON into DTO list", e);
+            throw e;
+        }
 
-        // 3. Validate each ticket for required fields
-        ticketDTOS.forEach(this::validateTicket);
+        // Validate business constraints & completeness
+        dtos.forEach(this::validateTicket);
 
-        return ticketDTOS;
+        if (log.isInfoEnabled())
+            log.info("Successfully mapped {} tickets to DTOs.", dtos.size());
+
+        return dtos;
     }
 
     /**
-     * Validates required TicketDTO fields.
-     * <p>If any required property is missing or empty, an exception is thrown.</p>
+     * Ensures that the "created" field is formatted using ISO-8601 conventions required by {@link Instant}.
+     * Handles common variations such as:
+     *  - Missing seconds → adds ":00"
+     *  - Missing timezone → appends "Z" (UTC)
      *
-     * @param ticket The ticket DTO object to validate.
+     * <p>If the timestamp still cannot be parsed, an exception is thrown to surface input data inconsistencies early.
+     */
+    private void normalizeCreatedTimestamp(ObjectNode node) {
+        JsonNode createdNode = node.get("created");
+        if (createdNode == null || !createdNode.isTextual()) {
+            if (log.isDebugEnabled())
+                log.debug("No 'created' timestamp found for node, skipping normalization.");
+            return;
+        }
+
+        String original = createdNode.asText().trim();
+        String normalized = original.replace(" ", "T");
+
+        // Add missing seconds
+        if (normalized.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$")) {
+            normalized += ":00Z";
+        }
+        // Add timezone if missing
+        if (normalized.matches("^\\d{4}-\\d{2}-\\d{2}T.*$") && !normalized.matches(".*[Z+-].*$")) {
+            normalized += "Z";
+        }
+
+        try {
+            Instant.parse(normalized);
+        } catch (DateTimeParseException e) {
+            if (log.isWarnEnabled())
+                log.warn("Invalid timestamp format detected for 'created': {} (normalized: {})", original, normalized);
+            throw new IllegalArgumentException("Invalid created timestamp format: '" + original + "'");
+        }
+
+        if (!original.equals(normalized) && log.isDebugEnabled())
+            log.debug("Normalized timestamp '{}' → '{}'", original, normalized);
+
+        node.put("created", normalized);
+    }
+
+    /**
+     * Validates required business fields to ensure the DTO represents a meaningful ticket.
+     *
+     * @param ticket the DTO instance to validate
      */
     private void validateTicket(TicketDTO ticket) {
-
-        if (ticket == null) {
-            throw new IllegalArgumentException("Ticket cannot be null");
-        }
-
-        if (ticket.getTicketKey() == null || ticket.getTicketKey().isBlank()) {
-            throw new IllegalArgumentException("ticketKey is required");
-        }
-
-        if (ticket.getChunkId() == null || ticket.getChunkId().isBlank()) {
-            throw new IllegalArgumentException("chunkId is required");
-        }
-
-        if (ticket.getProject() == null || ticket.getProject().isBlank()) {
-            throw new IllegalArgumentException("project is required");
-        }
-
-        if (ticket.getSourceField() == null || ticket.getSourceField().isBlank()) {
-            throw new IllegalArgumentException("sourceField is required");
-        }
+        require(ticket.getTicketKey(), "ticketKey");
+        require(ticket.getChunkId(), "chunkId");
+        require(ticket.getProject(), "project");
+        require(ticket.getSourceField(), "sourceField");
+        require(ticket.getStatus(), "status");
 
         if (ticket.getCreated() == null) {
+            if (log.isWarnEnabled())
+                log.warn("Validation failed: missing created timestamp for {}", ticket.getTicketKey());
             throw new IllegalArgumentException("created timestamp is required");
         }
 
-        if (ticket.getStatus() == null || ticket.getStatus().isBlank()) {
-            throw new IllegalArgumentException("status is required");
-        }
-
-        // Optional long-field validation
+        // Size safeguards to avoid vector-store poisoning / model hallucination amplification
         if (ticket.getLlmCause() != null && ticket.getLlmCause().length() > 2000) {
+            if (log.isWarnEnabled())
+                log.warn("llmCause exceeds limit ({} chars) for ticket {}", ticket.getLlmCause().length(), ticket.getTicketKey());
             throw new IllegalArgumentException("llmCause exceeds max length 2000 characters");
         }
 
         if (ticket.getLlmSolution() != null && ticket.getLlmSolution().length() > 3000) {
+            if (log.isWarnEnabled())
+                log.warn("llmSolution exceeds limit ({} chars) for ticket {}", ticket.getLlmSolution().length(), ticket.getTicketKey());
             throw new IllegalArgumentException("llmSolution exceeds max length 3000 characters");
+        }
+
+        log.debug("Validated ticket {}", ticket.getTicketKey());
+    }
+
+    /**
+     * Generic required-field check.
+     */
+    private void require(String value, String field) {
+        if (value == null || value.isBlank()) {
+            if (log.isWarnEnabled())
+                log.warn("Validation failed: {} is required", field);
+            throw new IllegalArgumentException(field + " is required");
         }
     }
 
     /**
-     * Converts a {@link TicketDTO} to the domain {@link Ticket} entity.
+     * Converts a DTO into the core {@link Ticket} domain model.
      */
     public Ticket ticketDTOtoDomain(TicketDTO ticketDTO) {
+        if (log.isDebugEnabled())
+            log.debug("Mapping TicketDTO → Ticket (key={})", ticketDTO.getTicketKey());
         return objectMapper.convertValue(ticketDTO, Ticket.class);
     }
 
     /**
-     * Converts a domain {@link Ticket} to a {@link TicketDTO}.
+     * Converts a domain entity back into its external-facing DTO representation.
      */
     public TicketDTO domainToTicketDTO(Ticket ticket) {
+        if (log.isDebugEnabled())
+            log.debug("Mapping Ticket → TicketDTO (key={})", ticket.getTicketKey());
         return objectMapper.convertValue(ticket, TicketDTO.class);
     }
 }

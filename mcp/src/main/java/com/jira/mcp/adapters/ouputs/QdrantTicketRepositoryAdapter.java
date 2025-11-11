@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jira.mcp.domain.models.Ticket;
 import com.jira.mcp.domain.repositories.TicketRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -30,6 +31,7 @@ import java.util.Map;
  */
 @Repository
 @RequiredArgsConstructor
+@Slf4j
 public class QdrantTicketRepositoryAdapter implements TicketRepository {
 
     /** VectorStore used for similarity search and storage. */
@@ -47,74 +49,85 @@ public class QdrantTicketRepositoryAdapter implements TicketRepository {
     @Max(100)
     private int topK;
 
-    /**
-     * Saves a single ticket to the vector store.
-     *
-     * @param ticket Ticket to save
-     * @return The same ticket object after storage
-     */
     @Override
     public Ticket saveTicket(Ticket ticket) {
+
+        if(log.isDebugEnabled())
+            log.debug("Converting ticket {} to vector document before saving.", ticket.getTicketKey());
         vectorStore.add(List.of(ticketToDocument(ticket)));
+
+        if(log.isInfoEnabled())
+            log.info("Saved ticket to vector store: key={}, project={}", ticket.getTicketKey(), ticket.getProject());
         return ticket;
     }
 
-    /**
-     * Saves a batch of tickets to the vector store.
-     *
-     * @param tickets List of tickets to save
-     * @return The same list of tickets after storage
-     */
     @Override
     public List<Ticket> saveTickets(List<Ticket> tickets) {
+
+        if (tickets == null || tickets.isEmpty()) {
+            if(log.isWarnEnabled())
+                log.warn("Attempted to save empty or null ticket list. No operation performed.");
+            return tickets;
+        }
+
+        if(log.isInfoEnabled())
+            log.info("Saving {} tickets to vector store...", tickets.size());
+
         List<Document> documents = tickets.stream()
                 .map(this::ticketToDocument)
                 .toList();
+
         vectorStore.add(documents);
+        if(log.isInfoEnabled())
+            log.info("Successfully saved {} tickets.", tickets.size());
         return tickets;
     }
 
-    /**
-     * Searches for tickets similar to the given cause description.
-     *
-     * @param ticketCause Text description of the problem to search for
-     * @return List of tickets ordered by similarity (most similar first)
-     */
     @Override
     public List<Ticket> searchTicketByDescription(String ticketCause) {
+        if(log.isInfoEnabled())
+            log.info("Performing similarity search for cause: {}", ticketCause);
+        if(log.isDebugEnabled())
+            log.debug("SearchRequest(topK={}) built for query input.", topK);
+
         List<Document> documents = vectorStore.similaritySearch(
                 SearchRequest.builder()
                         .query(ticketCause)
                         .topK(topK)
                         .build()
         );
+
+        if (documents.isEmpty()) {
+            if(log.isWarnEnabled())
+                log.warn("No similar tickets found for cause: {}", ticketCause);
+        } else {
+            if(log.isInfoEnabled())
+                log.info("{} similar tickets found for cause: '{}'", documents.size(), ticketCause);
+        }
+
         return documents.stream()
                 .map(this::documentToTicket)
                 .toList();
     }
 
-    /**
-     * Converts a {@link Ticket} to a {@link Document} for vector storage.
-     * The {@code llmCause} field is used as the text, and the entire ticket is stored as metadata.
-     *
-     * @param ticket Ticket to convert
-     * @return Document ready to be stored in the VectorStore
-     */
     private Document ticketToDocument(Ticket ticket) {
+
         Map<String, Object> ticketMap = objectMapper.convertValue(ticket, Map.class);
+        if(log.isDebugEnabled())
+            log.debug("Mapping ticket {} to document format.", ticket.getTicketKey());
+
         return Document.builder()
                 .text(ticket.getLlmCause())
                 .metadata(ticketMap)
                 .build();
     }
 
-    /**
-     * Converts a {@link Document} retrieved from the vector store back into a {@link Ticket}.
-     *
-     * @param document Document retrieved from VectorStore
-     * @return Corresponding Ticket
-     */
     private Ticket documentToTicket(Document document) {
-        return objectMapper.convertValue(document.getMetadata(), Ticket.class);
+
+        Ticket ticket = objectMapper.convertValue(document.getMetadata(), Ticket.class);
+        if(log.isDebugEnabled())
+            log.debug("Converted document back to ticket: key={}", ticket.getTicketKey());
+
+        return ticket;
     }
 }

@@ -1,4 +1,4 @@
-package com.jira.mcp.config;
+package com.jira.mcp.configuration;
 
 import com.jira.mcp.tools.ticket.TicketTools;
 import org.springframework.ai.tool.ToolCallbackProvider;

@@ -1,4 +1,4 @@
-package com.jira.mcp.config;
+package com.jira.mcp.configuration;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
