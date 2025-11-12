@@ -1,4 +1,4 @@
-package com.jira.mcp.adapters.ouputs;
+package com.jira.mcp.infrastructure.qdrant;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jira.mcp.domain.models.Ticket;
@@ -48,6 +48,10 @@ public class QdrantTicketRepositoryAdapter implements TicketRepository {
     @Min(1)
     @Max(100)
     private int topK;
+    @Value("${rag.similarity.threshold}")
+    @Min(0)
+    @Max(1)
+    private float similarityThreshold;
 
     @Override
     public Ticket saveTicket(Ticket ticket) {
@@ -94,6 +98,7 @@ public class QdrantTicketRepositoryAdapter implements TicketRepository {
                 SearchRequest.builder()
                         .query(ticketCause)
                         .topK(topK)
+                        .similarityThreshold(similarityThreshold)
                         .build()
         );
 
@@ -124,9 +129,11 @@ public class QdrantTicketRepositoryAdapter implements TicketRepository {
 
     private Ticket documentToTicket(Document document) {
 
+        if(log.isDebugEnabled())
+            log.debug("The score of similarity of the doc {}: {}" ,document.getId(),document.getScore());
         Ticket ticket = objectMapper.convertValue(document.getMetadata(), Ticket.class);
         if(log.isDebugEnabled())
-            log.debug("Converted document back to ticket: key={}", ticket.getTicketKey());
+            log.debug("Converted document {} back to ticket: key={}",document.getId(), ticket.getTicketKey());
 
         return ticket;
     }

@@ -1,16 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <!-- Define log directory -->
-    <property name="LOG_DIR" value="logs" />
 
-    <!-- Create log directory if it doesn't exist -->
-    <timestamp key="timestamp" datePattern="yyyy-MM-dd"/>
+    <property name="LOG_DIR" value="logs"/>
 
+    <!-- CONSOLE – colour + trace context -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} [%thread] %highlight(%-5level) %cyan(%logger{36}) - %msg%n</pattern>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %highlight(%-5level) %cyan(%logger{36}) [%X{serviceName:-${spring.application.name:-mcp}},%X{traceId:-},%X{spanId:-}] - %msg%n</pattern>
         </encoder>
     </appender>
 
+    <!-- FILE – structured + trace context -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${LOG_DIR}/mcp.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
@@ -19,20 +19,19 @@
             <totalSizeCap>1GB</totalSizeCap>
         </rollingPolicy>
         <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} [%X{serviceName:-${spring.application.name:-mcp}},%X{traceId:-},%X{spanId:-}] - %msg%n</pattern>
         </encoder>
         <prudent>true</prudent>
     </appender>
 
-    <!-- Application Loggers -->
-    <logger name="com.jira.mcp" level="DEBUG" additivity="false">
-        <appender-ref ref="CONSOLE" />
-        <appender-ref ref="FILE" />
+    <!-- Your package -->
+    <logger name="com.jira.mcp" level="TRACE" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
     </logger>
 
-    <!-- Root Logger -->
     <root level="INFO">
-        <appender-ref ref="CONSOLE" />
-        <appender-ref ref="FILE" />
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
     </root>
 </configuration>
