@@ -1,3 +1,6 @@
+# Architecture:
+<img width="1225" height="731" alt="image" src="https://github.com/user-attachments/assets/ad7bfe8b-1310-4b86-89de-04043915d684" />
+
 # RUN PROJECT:
 ### PACKAGING:
 ````
