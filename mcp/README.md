@@ -1,5 +1,6 @@
 # Architecture:
-<img width="1225" height="731" alt="image" src="https://github.com/user-attachments/assets/ad7bfe8b-1310-4b86-89de-04043915d684" />
+
+<img width="1658" height="966" alt="image" src="https://github.com/user-attachments/assets/80aed130-f460-44d4-a77b-328fc8912bbf" />
 
 # RUN PROJECT:
 ### PACKAGING:
