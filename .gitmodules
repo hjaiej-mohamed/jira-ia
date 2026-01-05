@@ -1,0 +1,15 @@
+[submodule "agentic-ui"]
+	path = agentic-ui
+	url = https://github.com/hjaiej-mohamed/agentic-ui.git
+[submodule "agentrca"]
+	path = agentrca
+	url = https://github.com/hjaiej-mohamed/agentrca.git
+[submodule "solon-embed-server"]
+	path = solon-embed-server
+	url = https://github.com/hjaiej-mohamed/solon-embed-server.git
+[submodule "mcprca"]
+	path = mcprca
+	url = https://github.com/hjaiej-mohamed/mcprca.git
+[submodule "orchestrator"]
+	path = orchestrator
+	url = https://github.com/hjaiej-mohamed/orchestrator.git

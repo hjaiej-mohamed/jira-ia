@@ -1,0 +1,5 @@
+aiohttp
+orjson
+requests
+python-dotenv
+pydantic
